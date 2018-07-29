@@ -1,0 +1,759 @@
+//Test code for the LIS2DS12 motion and temperature sensor on MiniZed
+
+#include <stdio.h>
+#include <linux/i2c.h>
+#include <linux/i2c-dev.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <string.h>
+
+#include <termios.h>
+
+int kbhit(void) {
+    static bool initflag = false;
+    static const int STDIN = 0;
+
+    if (!initflag) {
+        // Use termios to turn off line buffering
+        struct termios term;
+        tcgetattr(STDIN, &term);
+        term.c_lflag &= ~ICANON;
+        tcsetattr(STDIN, TCSANOW, &term);
+        setbuf(stdin, NULL);
+        initflag = true;
+    }
+
+    int nbbytes;
+    ioctl(STDIN, FIONREAD, &nbbytes);  // 0 is STDIN
+    return nbbytes;
+}
+
+#define u8	unsigned char
+#define u16 unsigned short
+#define I2C_FILE_NAME "/dev/i2c-0"
+
+// The following constant defines the address of the IIC device on the IIC bus.  Note that since
+// the address is only 7 bits, this  constant is the address divided by 2.
+#define MAGNETOMETER_ADDRESS  0x1E /* LIS3MDL on Arduino shield */
+#define MINIZED_MOTION_SENSOR_ADDRESS_SA0_LO  0x1E /* 0011110b for LIS2DS12 on MiniZed when SA0 is pulled low*/
+#define MINIZED_MOTION_SENSOR_ADDRESS_SA0_HI  0x1D /* 0011101b for LIS2DS12 on MiniZed when SA0 is pulled high*/
+
+#define LIS2DS12_ACC_WHO_AM_I         0x43
+/************** Device Register  *******************/
+#define LIS2DS12_ACC_SENSORHUB_OUT1  	0X06
+#define LIS2DS12_ACC_SENSORHUB_OUT2  	0X07
+#define LIS2DS12_ACC_SENSORHUB_OUT3  	0X08
+#define LIS2DS12_ACC_SENSORHUB_OUT4  	0X09
+#define LIS2DS12_ACC_SENSORHUB_OUT5  	0X0A
+#define LIS2DS12_ACC_SENSORHUB_OUT6  	0X0B
+#define LIS2DS12_ACC_MODULE_8BIT  	0X0C
+#define LIS2DS12_ACC_WHO_AM_I_REG  	0X0F
+#define LIS2DS12_ACC_CTRL1  	0X20
+#define LIS2DS12_ACC_CTRL2  	0X21
+#define LIS2DS12_ACC_CTRL3  	0X22
+#define LIS2DS12_ACC_CTRL4  	0X23
+#define LIS2DS12_ACC_CTRL5  	0X24
+#define LIS2DS12_ACC_FIFO_CTRL  	0X25
+#define LIS2DS12_ACC_OUT_T  	0X26
+#define LIS2DS12_ACC_STATUS  	0X27
+#define LIS2DS12_ACC_OUT_X_L  	0X28
+#define LIS2DS12_ACC_OUT_X_H  	0X29
+#define LIS2DS12_ACC_OUT_Y_L  	0X2A
+#define LIS2DS12_ACC_OUT_Y_H  	0X2B
+#define LIS2DS12_ACC_OUT_Z_L  	0X2C
+#define LIS2DS12_ACC_OUT_Z_H  	0X2D
+#define LIS2DS12_ACC_FIFO_THS  	0X2E
+#define LIS2DS12_ACC_FIFO_SRC  	0X2F
+#define LIS2DS12_ACC_FIFO_SAMPLES  	0X30
+#define LIS2DS12_ACC_TAP_6D_THS  	0X31
+#define LIS2DS12_ACC_INT_DUR  	0X32
+#define LIS2DS12_ACC_WAKE_UP_THS  	0X33
+#define LIS2DS12_ACC_WAKE_UP_DUR  	0X34
+#define LIS2DS12_ACC_FREE_FALL  	0X35
+#define LIS2DS12_ACC_STATUS_DUP  	0X36
+#define LIS2DS12_ACC_WAKE_UP_SRC  	0X37
+#define LIS2DS12_ACC_TAP_SRC  	0X38
+#define LIS2DS12_ACC_6D_SRC  	0X39
+#define LIS2DS12_ACC_STEP_C_MINTHS  	0X3A
+#define LIS2DS12_ACC_STEP_C_L  	0X3B
+#define LIS2DS12_ACC_STEP_C_H  	0X3C
+#define LIS2DS12_ACC_FUNC_CK_GATE  	0X3D
+#define LIS2DS12_ACC_FUNC_SRC  	0X3E
+#define LIS2DS12_ACC_FUNC_CTRL  	0X3F
+
+u8 send_byte;
+u8 write_data [256];
+u8 read_data [256];
+
+int i2c_file;
+useconds_t delay = 2000; //2ms
+u8 i2c_device_addr = MINIZED_MOTION_SENSOR_ADDRESS_SA0_HI; //by default
+
+static int set_i2c_register(int file,
+                            unsigned char addr,
+                            unsigned char reg,
+                            unsigned char value) {
+
+    unsigned char outbuf[2];
+    struct i2c_rdwr_ioctl_data packets;
+    struct i2c_msg messages[1];
+
+    messages[0].addr  = addr;
+    messages[0].flags = 0;
+    messages[0].len   = sizeof(outbuf);
+    messages[0].buf   = outbuf;
+
+    /* The first byte indicates which register we'll write */
+    outbuf[0] = reg;
+
+    /*
+     * The second byte indicates the value to write.  Note that for many
+     * devices, we can write multiple, sequential registers at once by
+     * simply making outbuf bigger.
+     */
+    outbuf[1] = value;
+
+    /* Transfer the i2c packets to the kernel and verify it worked */
+    packets.msgs  = messages;
+    packets.nmsgs = 1;
+    if(ioctl(file, I2C_RDWR, &packets) < 0) {
+        perror("Unable to send data");
+        return 1;
+    }
+
+    return 0;
+}
+
+
+static int get_i2c_register(int file,
+                            unsigned char addr,
+                            unsigned char reg,
+                            unsigned char *val) {
+    unsigned char inbuf, outbuf;
+    struct i2c_rdwr_ioctl_data packets;
+    struct i2c_msg messages[2];
+
+    /*
+     * In order to read a register, we first do a "dummy write" by writing
+     * 0 bytes to the register we want to read from.  This is similar to
+     * the packet in set_i2c_register, except it's 1 byte rather than 2.
+     */
+    outbuf = reg;
+    messages[0].addr  = addr;
+    messages[0].flags = 0;
+    messages[0].len   = sizeof(outbuf);
+    messages[0].buf   = &outbuf;
+
+    /* The data will get returned in this structure */
+    messages[1].addr  = addr;
+    messages[1].flags = I2C_M_RD/* | I2C_M_NOSTART*/;
+    messages[1].len   = sizeof(inbuf);
+    messages[1].buf   = &inbuf;
+
+    /* Send the request to the kernel and get the result back */
+    packets.msgs      = messages;
+    packets.nmsgs     = 2;
+    if(ioctl(file, I2C_RDWR, &packets) < 0) {
+        perror("Unable to send data");
+        return 1;
+    }
+    *val = inbuf;
+
+    return 0;
+}
+
+
+u8 LIS2DS12_WriteReg(u8 Reg, u8 *Bufp, u16 len)
+{
+	if(set_i2c_register(i2c_file, i2c_device_addr, Reg, (u8)(Bufp[0])))
+    {
+        printf("Unable to set register!\n");
+        return (1);
+    }
+	return(0);
+}
+
+u8 LIS2DS12_ReadReg(u8 Reg, u8 *Bufp, u16 len)
+{
+    if(get_i2c_register(i2c_file, i2c_device_addr, Reg, &Bufp[0]))
+    {
+        printf("Unable to get register!\n");
+        return (1);
+    }
+	return(0);
+}
+
+
+void sensor_init(void)
+{
+	u8 who_am_i = 0;
+
+	i2c_device_addr = MINIZED_MOTION_SENSOR_ADDRESS_SA0_HI; //default
+	LIS2DS12_ReadReg(LIS2DS12_ACC_WHO_AM_I_REG, &who_am_i, 1);
+	printf("With I2C device address 0x%02x received WhoAmI = 0x%02x\r\n", i2c_device_addr, who_am_i);
+	if (who_am_i != LIS2DS12_ACC_WHO_AM_I)
+	{
+		//maybe the address bit was changed, try the other one:
+		i2c_device_addr = MINIZED_MOTION_SENSOR_ADDRESS_SA0_LO;
+		LIS2DS12_ReadReg(LIS2DS12_ACC_WHO_AM_I_REG, &who_am_i, 1);
+		printf("With I2C device address 0x%02x received WhoAmI = 0x%02x\r\n", i2c_device_addr, who_am_i);
+	}
+	send_byte = 0x00; //No auto increment
+	LIS2DS12_WriteReg(LIS2DS12_ACC_CTRL2, &send_byte, 1);
+
+
+	//Write 60h in CTRL1	// Turn on the accelerometer.  14-bit mode, ODR = 400 Hz, FS = 2g
+	send_byte = 0x60;
+	LIS2DS12_WriteReg(LIS2DS12_ACC_CTRL1, &send_byte, 1);
+	printf("CTL1 = 0x60 written\r\n");
+
+	//Enable interrupt
+	send_byte = 0x01; //Acc data-ready interrupt on INT1
+	LIS2DS12_WriteReg(LIS2DS12_ACC_CTRL4, &send_byte, 1);
+	printf("CTL4 = 0x01 written\r\n");
+
+#if (0)
+	write_data[0] = 0x0F; //WhoAmI
+	ByteCount = XIic_Send(IIC_BASE_ADDRESS, MAGNETOMETER_ADDRESS, (u8*)&write_data, 1, XIIC_REPEATED_START);
+	ByteCount = XIic_Recv(IIC_BASE_ADDRESS, MAGNETOMETER_ADDRESS, (u8*)&read_data[0], 1, XIIC_STOP);
+	printf("Received 0x%02x\r\n",read_data[0]);
+	printf("\r\n"); //Empty line
+	//for (int n=0;n<1400;n++) //118 ms is too little
+	for (int n=0;n<1500;n++) //128 ms
+	{
+		printf(".");
+	};
+	printf("\r\n");
+#endif
+} //sensor_init()
+
+void read_temperature(void)
+{
+	int temp;
+	u8 read_value;
+
+	LIS2DS12_ReadReg(LIS2DS12_ACC_OUT_T, &read_value, 1);
+	//Temperature is from -40 to +85 deg C.  So 125 range.  0 is 25 deg C.  +1 deg C/LSB.  So if value < 128 temp = 25 + value else temp = 25 - (256-value)
+	if (read_value < 128)
+	{
+		temp = 25 + read_value;
+	}
+	else
+	{
+		temp = 25 - (256 - read_value);
+	}
+	printf(" OUT_T register = 0x%02x -> Temperature = %i degrees C.  ",read_value,temp);
+	//printf("OUT_T register = 0x%02x -> Temperature = %i degrees C\r\n",read_value,temp);
+} //read_temperature()
+
+int u16_2s_complement_to_int(u16 word_to_convert)
+{
+	u16 result_16bit;
+	int result_14bit;
+	int sign;
+
+	if (word_to_convert & 0x8000)
+	{ //MSB is set, negative number
+		//Invert and add 1
+		sign = -1;
+		result_16bit = (~word_to_convert) + 1;
+	}
+	else
+	{ //Positive number
+		//No change
+		sign = 1;
+		result_16bit = word_to_convert;
+	}
+	//We are using it in 14-bit mode
+	//All data is left-aligned.  So convert 16-bit value to 14-but value
+	result_14bit = sign * (int)(result_16bit >> 2);
+	return(result_14bit);
+} //u16_2s_complement_to_int()
+
+void read_motion(void)
+{
+	int iacceleration_X;
+	int iacceleration_Y;
+	int iacceleration_Z;
+	u8 read_value_LSB;
+	u8 read_value_MSB;
+	u16 accel_X;
+	u16 accel_Y;
+	u16 accel_Z;
+	u8 accel_status;
+	u8 data_ready;
+
+	data_ready = 0;
+	while (!data_ready)
+	{ //wait for DRDY
+		LIS2DS12_ReadReg(LIS2DS12_ACC_STATUS, &accel_status, 1);
+		data_ready = accel_status & 0x01; //bit 0 = DRDY
+        usleep(5); //micro seconds
+	} //wait for DRDY
+
+
+	//Read X:
+	LIS2DS12_ReadReg(LIS2DS12_ACC_OUT_X_L, &read_value_LSB, 1);
+	LIS2DS12_ReadReg(LIS2DS12_ACC_OUT_X_H, &read_value_MSB, 1);
+	accel_X = (read_value_MSB << 8) + read_value_LSB;
+	iacceleration_X = u16_2s_complement_to_int(accel_X);
+	//Read Y:
+	LIS2DS12_ReadReg(LIS2DS12_ACC_OUT_Y_L, &read_value_LSB, 1);
+	LIS2DS12_ReadReg(LIS2DS12_ACC_OUT_Y_H, &read_value_MSB, 1);
+	accel_Y = (read_value_MSB << 8) + read_value_LSB;
+	iacceleration_Y = u16_2s_complement_to_int(accel_Y);
+	//Read Z:
+	LIS2DS12_ReadReg(LIS2DS12_ACC_OUT_Z_L, &read_value_LSB, 1);
+	LIS2DS12_ReadReg(LIS2DS12_ACC_OUT_Z_H, &read_value_MSB, 1);
+	accel_Z = (read_value_MSB << 8) + read_value_LSB;
+	iacceleration_Z = u16_2s_complement_to_int(accel_Z);
+
+//	printf("  Acceleration = X: %+5d, Y: %+5d, Z: %+5d\r\n",iacceleration_X, iacceleration_Y, iacceleration_Z);
+	printf("  Acceleration = X: %+5d, Y: %+5d, Z: %+5d\r",iacceleration_X, iacceleration_Y, iacceleration_Z);
+} //read_motion()
+
+/* String formats used to build the file name path to specific GPIO
+ * instances. */
+#define FILE_FORMAT_GPIO_PATH          "/sys/class/gpio"
+#define FILE_FORMAT_GPIO_EXPORT        "/export"
+#define FILE_FORMAT_GPIO_DIRECTION     "/direction"
+#define FILE_FORMAT_GPIO_VALUE         "/value"
+
+#define GPIO_DIRECTION_INPUT	0
+#define GPIO_DIRECTION_OUTPUT	1
+
+// The max # of GPIOs this release of Linux is configured to support is 1024.  The ZYNQ PS GPIO block has 118 IOs (54 on MIO, 64 on EMIO).
+// 1024-118 = 906, hence “gpiochip906”.  In our design, we have BT_REG_ON tied to EMIO[0], which is the first GPIO after all of the MIO, or 906 + 54 = 960.
+
+#define GPIO_OFFSET							906
+#define GPIO_PS_BUTTON_OFFSET				906 //MIO#0
+#define GPIO_PS_LED_R_OFFSET				958 //MIO#52 (906+52=958)
+#define GPIO_PS_LED_G_OFFSET				959 //MIO#53 (906+53=959)
+#define GPIO_PL_LED_G_OFFSET				905 //pl_led_2bits(1)
+#define GPIO_PL_LED_R_OFFSET				904 //pl_led_2bits(0)
+#define GPIO_PL_SWITCH_OFFSET				903 //pl_sw_1bit
+#define GPIO_PL_MICROPHONE7_OFFSET			902 //Bit 7 of AXI_GPIO to microphone
+#define GPIO_PL_MICROPHONE6_OFFSET			901 //Bit 6 of AXI_GPIO to microphone
+#define GPIO_PL_MICROPHONE5_OFFSET			900 //Bit 5 of AXI_GPIO to microphone
+#define GPIO_PL_MICROPHONE4_OFFSET			899 //Bit 4 of AXI_GPIO to microphone
+#define GPIO_PL_MICROPHONE3_OFFSET			898 //Bit 3 of AXI_GPIO to microphone
+#define GPIO_PL_MICROPHONE2_OFFSET			897 //Bit 2 of AXI_GPIO to microphone
+#define GPIO_PL_MICROPHONE1_OFFSET			896 //Bit 1 of AXI_GPIO to microphone
+#define GPIO_PL_MICROPHONE0_OFFSET			895 //Bit 0 of AXI_GPIO to microphone
+
+#define LED_COLOR_OFF	0
+#define LED_COLOR_GREEN	1
+#define LED_COLOR_RED	2
+#define LED_COLOR_AMBER	3
+
+int configure_gpio(int gpio_offset, unsigned char gpio_direction)
+{
+	char gpio_setting[8];
+	int test_result = 0;
+	const int char_buf_size = 80;
+	char formatted_file_name[char_buf_size];
+	FILE  *fp;
+
+	// Open the export file and write the PSGPIO number for each Pmod GPIO
+	// signal to the Linux sysfs GPIO export property, then close the file.
+	fp = fopen(FILE_FORMAT_GPIO_PATH FILE_FORMAT_GPIO_EXPORT, "w");
+	if (fp == NULL)
+	{
+		printf("Error opening /sys/class/gpio/export node\n");
+		return -1;
+	}
+	else
+	{
+		// Set the value property for the export to the GPIO number.
+		snprintf(gpio_setting, 4, "%d", gpio_offset);
+		fwrite(&gpio_setting, sizeof(char), 3, fp);
+		fflush(fp);
+
+		fclose(fp);
+	}
+
+	// Check the direction property of the GPIO number for SW1.
+	test_result = snprintf(formatted_file_name, (char_buf_size - 1), FILE_FORMAT_GPIO_PATH"/gpio%d"FILE_FORMAT_GPIO_DIRECTION, gpio_offset);
+	if ((test_result < 0) ||
+		(test_result == (char_buf_size - 1)))
+	{
+		printf("Error formatting string, check the GPIO specified\r\n");
+		printf(formatted_file_name);
+		return -1;
+	}
+	fp = fopen(formatted_file_name, "r+");
+	if (fp == NULL)
+	{
+		printf("Error opening "FILE_FORMAT_GPIO_PATH"/gpio%d"FILE_FORMAT_GPIO_DIRECTION" node\n", gpio_offset);
+		return -1;
+	}
+	else
+	{
+		fscanf(fp, "%s", gpio_setting);
+		printf("gpio%d set as %s\n", gpio_offset, gpio_setting);
+
+		if (gpio_direction == GPIO_DIRECTION_INPUT)
+		{
+			strcpy(gpio_setting, "in");
+			fwrite(&gpio_setting, sizeof(char), 2, fp);
+		}
+		else
+		{ //GPIO_DIRECTION_OUTPUT
+			strcpy(gpio_setting, "out");
+			fwrite(&gpio_setting, sizeof(char), 3, fp);
+		}
+		fflush(fp);
+		fclose(fp);
+	}
+	return test_result;
+} //configure_gpio()
+
+int set_gpio_value(int gpio_offset, unsigned char gpio_value)
+{
+	const int char_buf_size = 80;
+    char gpio_setting[5];
+    int test_result = 0;
+    char formatted_file_name[char_buf_size];
+
+    FILE  *fp_led;
+
+    // Open the gpio value properties so that they can be read/written.
+    test_result = snprintf(formatted_file_name, (char_buf_size - 1), FILE_FORMAT_GPIO_PATH"/gpio%d"FILE_FORMAT_GPIO_VALUE, gpio_offset);
+    if ((test_result < 0) ||
+        (test_result == (char_buf_size - 1)))
+    {
+        printf("Error formatting string, check the GPIO specified\r\n");
+        printf(formatted_file_name);
+        return -1;
+    }
+    fp_led = fopen(formatted_file_name, "r+");
+	// Now turn the specified LED ON.
+    sprintf(gpio_setting, "%d", gpio_value);
+	//strcpy(gpio_setting, "1");
+    fwrite(&gpio_setting, sizeof(char), 1, fp_led);
+    fflush(fp_led);
+    // Close the GPIO value property files.
+    fclose(fp_led);
+    return test_result;
+} //set_gpio_value()
+
+void set_PS_LED_color(unsigned char led_color)
+{
+	switch(led_color)
+	{
+		case LED_COLOR_OFF :
+			set_gpio_value(GPIO_PS_LED_R_OFFSET, 0); //Red LED off
+			set_gpio_value(GPIO_PS_LED_G_OFFSET, 0); //Green LED off
+			break;
+		case LED_COLOR_GREEN :
+			set_gpio_value(GPIO_PS_LED_R_OFFSET, 0); //Red LED off
+			set_gpio_value(GPIO_PS_LED_G_OFFSET, 1); //Green LED on
+			break;
+		case LED_COLOR_RED :
+			set_gpio_value(GPIO_PS_LED_R_OFFSET, 1); //Red LED on
+			set_gpio_value(GPIO_PS_LED_G_OFFSET, 0); //Green LED off
+			break;
+		case LED_COLOR_AMBER :
+			set_gpio_value(GPIO_PS_LED_R_OFFSET, 1); //Red LED on
+			set_gpio_value(GPIO_PS_LED_G_OFFSET, 1); //Green LED on
+			break;
+		default : /* Error */
+			//Do nothing
+			break;
+	} //switch(led_color)
+} //set_PS_LED_color()
+
+void set_PL_LED_color(unsigned char led_color)
+{
+	switch(led_color)
+	{
+		case LED_COLOR_OFF :
+			set_gpio_value(GPIO_PL_LED_R_OFFSET, 0); //Red LED off
+			set_gpio_value(GPIO_PL_LED_G_OFFSET, 0); //Green LED off
+			break;
+		case LED_COLOR_GREEN :
+			set_gpio_value(GPIO_PL_LED_R_OFFSET, 0); //Red LED off
+			set_gpio_value(GPIO_PL_LED_G_OFFSET, 1); //Green LED on
+			break;
+		case LED_COLOR_RED :
+			set_gpio_value(GPIO_PL_LED_R_OFFSET, 1); //Red LED on
+			set_gpio_value(GPIO_PL_LED_G_OFFSET, 0); //Green LED off
+			break;
+		case LED_COLOR_AMBER :
+			set_gpio_value(GPIO_PL_LED_R_OFFSET, 1); //Red LED on
+			set_gpio_value(GPIO_PL_LED_G_OFFSET, 1); //Green LED on
+			break;
+		default : /* Error */
+			//Do nothing
+			break;
+	} //switch(led_color)
+} //set_PL_LED_color()
+
+int get_gpio_value(int gpio_offset)
+{
+	const int char_buf_size = 80;
+    char gpio_setting[5];
+    int test_result = 0;
+    char formatted_file_name[char_buf_size];
+
+	int sw1_value;
+	FILE  *fp_sw1;
+
+	// Open the gpio value properties so that they can be read/written.
+
+	// Open the value property file for SW1.
+	test_result = snprintf(formatted_file_name, (char_buf_size - 1), FILE_FORMAT_GPIO_PATH"/gpio%d"FILE_FORMAT_GPIO_VALUE, gpio_offset);
+	if ((test_result < 0) ||
+		(test_result == (char_buf_size - 1)))
+	{
+		printf("Error formatting string, check the GPIO specified\r\n");
+		printf(formatted_file_name);
+		return -1;
+	}
+	fp_sw1 = fopen(formatted_file_name, "r+");
+
+	// Read the current value of the SW1 GPIO input.
+	fscanf(fp_sw1, "%s", gpio_setting);
+
+	if (!strcmp(gpio_setting, "1"))
+		sw1_value = 1;
+	else if (!strcmp(gpio_setting, "0"))
+		sw1_value = 0;
+
+	// Close the GPIO value property files.
+	fclose(fp_sw1);
+
+	return sw1_value;
+} //get_gpio_value()
+
+unsigned char get_PS_button_value(void)
+{
+	unsigned char value;
+	value = get_gpio_value(GPIO_PS_BUTTON_OFFSET);
+	return(value);
+} //get_PS_button_value()
+
+unsigned char get_PL_switch_value(void)
+{
+	unsigned char value;
+	value = get_gpio_value(GPIO_PL_SWITCH_OFFSET);
+	return(value);
+} //get_PL_switch_value()
+
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+int main( int argc, char *argv[] )
+{
+	#define LOOP_DELAY_MS 20
+	int iTimeout_secs = 1;
+	int iTime_remaining_ms = iTimeout_secs * 1000;
+	bool bUserEnteredTimeout;
+	bool bKeyPressed = false;
+	char chkey;
+	bool bmicrophone_present = true;
+
+	printf("################################################################################\n");
+    printf("Testing the MiniZed GPIO and ST Micro LIS2DS12 I2C motion and temperature sensor\n");
+    printf("--------------------------------------------------------------------------------\n");
+    printf("The PS Button will reset the LED counter\n");
+    printf("The PL switch selects the LED count or microphone output on the PL LED\n");
+    printf("################################################################################\n");
+	//See if a timeout in seconds was specified as a command line argument:
+    if(argc<=1)
+	{
+		//printf("No user arguments: Will loop forever.\n");
+		bUserEnteredTimeout = false;
+	}
+	else
+	{
+		iTimeout_secs = atoi(argv[1]);  //argv[0] is the program name
+		iTime_remaining_ms = iTimeout_secs * 1000;
+		printf("User specified timeout = %i seconds.\n", iTimeout_secs);
+		bUserEnteredTimeout = true;
+	}
+
+	// Open a connection to the I2C userspace control file.
+    if ((i2c_file = open(I2C_FILE_NAME, O_RDWR)) < 0) {
+        perror("Unable to open i2c control file");
+        exit(1);
+    }
+	sensor_init();
+
+	configure_gpio(GPIO_PL_SWITCH_OFFSET, GPIO_DIRECTION_INPUT);
+	configure_gpio(GPIO_PS_BUTTON_OFFSET, GPIO_DIRECTION_INPUT);
+	configure_gpio(GPIO_PS_LED_R_OFFSET, GPIO_DIRECTION_OUTPUT);
+	configure_gpio(GPIO_PS_LED_G_OFFSET, GPIO_DIRECTION_OUTPUT);
+	configure_gpio(GPIO_PL_LED_R_OFFSET, GPIO_DIRECTION_OUTPUT);
+	configure_gpio(GPIO_PL_LED_G_OFFSET, GPIO_DIRECTION_OUTPUT);
+	if (configure_gpio(GPIO_PL_MICROPHONE0_OFFSET, GPIO_DIRECTION_OUTPUT) < 0)
+	{
+		bmicrophone_present = false;
+		printf("No microphone selection register present in PL.\n");
+	}
+	else if (configure_gpio(GPIO_PL_MICROPHONE1_OFFSET, GPIO_DIRECTION_OUTPUT) < 0)
+	{
+		bmicrophone_present = false;
+		printf("No microphone selection register present in PL.\n");
+	}
+
+	unsigned int free_count = 0;
+	unsigned int led_count = 0;
+	unsigned char led_counter_select = 0;
+	unsigned char led_counter_select_history;
+	//These are inverted, since we want the default switch position to select the microphone
+	led_counter_select = get_PL_switch_value() ^ 1; //XOR
+	if (bmicrophone_present)
+	{
+		set_gpio_value(GPIO_PL_MICROPHONE1_OFFSET, led_counter_select);
+	}
+	led_counter_select_history = led_counter_select;
+
+	//while (1) //forever
+	while (iTime_remaining_ms > 0)
+	{
+		//Echo not switch on microphone GPIO bit 1:
+		led_counter_select = get_PL_switch_value() ^ 1; //XOR
+		if (led_counter_select_history != led_counter_select)
+		{ //only update when there is a change:
+			if (bmicrophone_present)
+			{
+				set_gpio_value(GPIO_PL_MICROPHONE1_OFFSET, led_counter_select);
+			}
+			led_counter_select_history = led_counter_select;
+		}
+		//reset the count when the button is pushed:
+		if (get_PS_button_value() == 1)
+		{
+			free_count = 0;
+		}
+		led_count = (free_count & 0x0F0) >> 4;
+		//Show a binary counter on teh two LEDs:
+		switch(led_count)
+		{
+			case 0x00 :
+				set_PL_LED_color(LED_COLOR_OFF);
+				set_PS_LED_color(LED_COLOR_OFF);
+				break;
+			case 0x01 :
+				set_PL_LED_color(LED_COLOR_OFF);
+				set_PS_LED_color(LED_COLOR_RED);
+				break;
+			case 0x02 :
+				set_PL_LED_color(LED_COLOR_OFF);
+				set_PS_LED_color(LED_COLOR_GREEN);
+				break;
+			case 0x03 :
+				set_PL_LED_color(LED_COLOR_OFF);
+				set_PS_LED_color(LED_COLOR_AMBER);
+				break;
+			case 0x04 :
+				set_PL_LED_color(LED_COLOR_RED);
+				set_PS_LED_color(LED_COLOR_OFF);
+				break;
+			case 0x05 :
+				set_PL_LED_color(LED_COLOR_RED);
+				set_PS_LED_color(LED_COLOR_RED);
+				break;
+			case 0x06 :
+				set_PL_LED_color(LED_COLOR_RED);
+				set_PS_LED_color(LED_COLOR_GREEN);
+				break;
+			case 0x07 :
+				set_PL_LED_color(LED_COLOR_RED);
+				set_PS_LED_color(LED_COLOR_AMBER);
+				break;
+			case 0x08 :
+				set_PL_LED_color(LED_COLOR_GREEN);
+				set_PS_LED_color(LED_COLOR_OFF);
+				break;
+			case 0x09 :
+				set_PL_LED_color(LED_COLOR_GREEN);
+				set_PS_LED_color(LED_COLOR_RED);
+				break;
+			case 0x0A :
+				set_PL_LED_color(LED_COLOR_GREEN);
+				set_PS_LED_color(LED_COLOR_GREEN);
+				break;
+			case 0x0B :
+				set_PL_LED_color(LED_COLOR_GREEN);
+				set_PS_LED_color(LED_COLOR_AMBER);
+				break;
+			case 0x0C :
+				set_PL_LED_color(LED_COLOR_AMBER);
+				set_PS_LED_color(LED_COLOR_OFF);
+				break;
+			case 0x0D :
+				set_PL_LED_color(LED_COLOR_AMBER);
+				set_PS_LED_color(LED_COLOR_RED);
+				break;
+			case 0x0E :
+				set_PL_LED_color(LED_COLOR_AMBER);
+				set_PS_LED_color(LED_COLOR_GREEN);
+				break;
+			case 0x0F :
+				set_PL_LED_color(LED_COLOR_AMBER);
+				set_PS_LED_color(LED_COLOR_AMBER);
+				break;
+			default : /* Error */
+				//Do nothing
+				break;
+		} //switch(led_color)
+		fflush(stdout); //you need to do this before you sleep
+		usleep(20000); //20 ms
+		free_count++;
+		if ((free_count & 0x1F) == 0x1F) //Every 31*20ms = 0.62 seconds
+		{
+			read_temperature();
+			read_motion();
+		}
+		if (bUserEnteredTimeout)
+		{
+			iTime_remaining_ms -= LOOP_DELAY_MS;
+		}
+
+	    if (kbhit())
+		{
+	    	bKeyPressed = true;
+			chkey = getchar();
+			//printf("\nChar received:%c\n", chkey);
+			break;
+		}
+
+	} //while (timeout)
+	printf("\n*******************************************************************************************************\n");
+	if (bKeyPressed)
+	{
+		int intkey = (int)chkey;
+		if (chkey == ' ')
+		{
+			printf("GPIO and I2C sensor test interrupted by the SPACE key.\n");
+		}
+		else if ((intkey == 0x0A) || (intkey == 0x0D))
+		{
+			printf("GPIO and I2C sensor test interrupted by the ENTER key.\n");
+		}
+		else if (intkey == 0x1B)
+		{
+			printf("GPIO and I2C sensor test interrupted by the ESCAPE key.\n");
+		}
+		else if ((intkey >= 0x21) && (intkey <= 0x7E))
+		{
+			printf("GPIO and I2C sensor test interrupted by the '%c' key.\n", chkey);
+		}
+		else
+		{
+			printf("GPIO and I2C sensor test interrupted by key: 0x%02X.\n", intkey);
+		}
+	}
+	else if (bUserEnteredTimeout)
+	{
+		printf("GPIO and I2C sensor test done after %i seconds.\n", iTimeout_secs);
+	}
+	printf("\n");
+	fflush(stdout); // Prints to screen or whatever your standard out is
+	close(i2c_file);
+	return 0;
+
+} //main()
+

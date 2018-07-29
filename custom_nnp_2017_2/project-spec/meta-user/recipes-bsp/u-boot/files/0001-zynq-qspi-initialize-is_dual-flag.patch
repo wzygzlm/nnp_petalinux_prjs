@@ -1,0 +1,24 @@
+From 26b586ba532beb3670830bae374b6c01b50b0d17 Mon Sep 17 00:00:00 2001
+From: G Kranthi <gudishak@xilinx.com>
+Date: Tue, 20 Jun 2017 01:00:56 +0530
+Subject: [PATCH] zynq: qspi: initialize is_dual flag
+
+---
+ drivers/spi/zynq_qspi.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/spi/zynq_qspi.c b/drivers/spi/zynq_qspi.c
+index a68afc8..e3de964 100644
+--- a/drivers/spi/zynq_qspi.c
++++ b/drivers/spi/zynq_qspi.c
+@@ -316,6 +316,7 @@ static int zynq_qspi_probe(struct udevice *bus)
+ 
+ 	priv->regs = plat->regs;
+ 	priv->is_dual = plat->is_dual;
++	priv->is_dual = 0;
+ 
+ 	if (priv->is_dual == -1) {
+ 		debug("%s: No QSPI device detected based on MIO settings\n",
+-- 
+2.7.4
+

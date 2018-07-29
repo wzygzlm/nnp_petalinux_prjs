@@ -1,0 +1,40 @@
+/include/ "system-conf.dtsi"
+/* QSPI addresses are defined with petalinux-config, but here they are overwritten so that one can program the flash internally */
+&qspi {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	flash0: flash@0 {
+		compatible = "micron,m25p80";
+		reg = <0x0>;
+		#address-cells = <1>;
+		#size-cells = <1>;
+		spi-max-frequency = <50000000>;
+		partition@0x00000000 {
+			label = "boot";
+			reg = <0x00000000 0x00ff0000>;
+		};
+	};
+};
+
+/{
+	usb_phy0: usb_phy@0 {
+		compatible = "ulpi-phy";
+		#phy-cells = <0>;
+		reg = <0xe0002000 0x1000>;
+		view-port = <0x0170>;
+		drv-vbus;
+	};
+};
+
+&usb0 {
+	dr_mode = "otg";
+	usb-phy = <&usb_phy0>;
+} ;
+
+
+/* Console UART.  UART1 is tied to the USB serial port on the Zedboard */
+&uart1 {
+   	status = "okay";
+	current-speed = <115200>;
+	port-number = <0>;
+};

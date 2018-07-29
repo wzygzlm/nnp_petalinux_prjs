@@ -71,4 +71,11 @@
  current-speed = <115200>;
  port-number = <0>;
 };
+
+
+/{
+ xlnk {
+  compatible = "xlnk, xlnk-1.0";
+ };
+};
 # 29 "/home/petalinux/nnp_petalinux_prjs/custom_nnp_2017_2/build/../components/plnx_workspace/device-tree-generation/system-top.dts" 2

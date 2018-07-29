@@ -571,4 +571,8 @@
 		linux,phandle = <0x7>;
 		phandle = <0x7>;
 	};
+
+	xlnk {
+		compatible = "xlnk, xlnk-1.0";
+	};
 };

@@ -38,3 +38,10 @@
 	current-speed = <115200>;
 	port-number = <0>;
 };
+
+/* xlnk */
+/{
+	xlnk {
+		compatible = "xlnk, xlnk-1.0";
+	};
+};

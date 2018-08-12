@@ -1,8 +1,10 @@
 
-XSCTH_WS = "${TOPDIR}/../components/plnx_workspace"
+YAML_SERIAL_CONSOLE_STDIN_forcevariable = "ps7_uart_1"
+XSCTH_WS = "${TOPDIR}/../components/plnx_workspace/fsbl"
 EXTERNALXSCTSRC = "${PETALINUX}/tools/hsm/data/embeddedsw"
+EXTERNALXSCTSRCHASH = "build"
 inherit externalxsctsrc
-EXTERNALXSCTSRC_BUILD = "${TOPDIR}/../components/plnx_workspace"
-export PETALINUX
-YAML_SERIAL_CONSOLE_STDOUT = "ps7_uart_1"
-YAML_SERIAL_CONSOLE_STDIN = "ps7_uart_1"
+YAML_SERIAL_CONSOLE_STDOUT_forcevariable = "ps7_uart_1"
+EXTERNALXSCTSRC_BUILD = "${TOPDIR}/../components/plnx_workspace/fsbl"
+export _JAVA_OPTIONS
+_JAVA_OPTIONS = "-Duser.home=${TMPDIR}/xsctenv"

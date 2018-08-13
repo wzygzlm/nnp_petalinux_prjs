@@ -6,3 +6,4 @@ images/
 *.o
 *.jou
 *.log
+project-spec/meta-plnx-generated/

@@ -1207,26 +1207,26 @@ CONFIG_run-postinsts=y
 #
 # boost 
 #
-# CONFIG_boost is not set
-# CONFIG_boost-random is not set
-# CONFIG_boost-regex is not set
-# CONFIG_boost-atomic is not set
-# CONFIG_boost-thread is not set
-# CONFIG_boost-serialization is not set
-# CONFIG_boost-filesystem is not set
-# CONFIG_boost-test is not set
-# CONFIG_boost-system is not set
-# CONFIG_boost-graph is not set
-# CONFIG_boost-container is not set
-# CONFIG_boost-date-time is not set
-# CONFIG_boost-math is not set
-# CONFIG_boost-signals is not set
-# CONFIG_boost-wave is not set
-# CONFIG_boost-chrono is not set
-# CONFIG_boost-timer is not set
-# CONFIG_boost-dev is not set
-# CONFIG_boost-program-options is not set
-# CONFIG_boost-iostreams is not set
+CONFIG_boost=y
+CONFIG_boost-random=y
+CONFIG_boost-regex=y
+CONFIG_boost-atomic=y
+CONFIG_boost-thread=y
+CONFIG_boost-serialization=y
+CONFIG_boost-filesystem=y
+CONFIG_boost-test=y
+CONFIG_boost-system=y
+CONFIG_boost-graph=y
+CONFIG_boost-container=y
+CONFIG_boost-date-time=y
+CONFIG_boost-math=y
+CONFIG_boost-signals=y
+CONFIG_boost-wave=y
+CONFIG_boost-chrono=y
+CONFIG_boost-timer=y
+CONFIG_boost-dev=y
+CONFIG_boost-program-options=y
+CONFIG_boost-iostreams=y
 # CONFIG_boost-dbg is not set
 # CONFIG_boost-log is not set
 
